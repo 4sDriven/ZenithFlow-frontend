@@ -61,6 +61,8 @@ const props = defineProps<{
   rootRpid: string
   targetRpid: string
   rootComment?: Comment | null
+  videoTitle?: string
+  videoBvid?: string
 }>()
 
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -985,7 +987,11 @@ async function exportGraphImage() {
   const el = viewport.value
   if (exporting.value || !current.nodes.length || !el) return
 
-  const estimate = estimateThreadGraphImageSize(current.width, current.height)
+  const estimate = estimateThreadGraphImageSize(
+    current.width,
+    current.height,
+    Boolean(props.videoTitle?.trim() || props.videoBvid?.trim()),
+  )
   if (estimate.scale < 0.6) {
     const ok = window.confirm(
       `当前关系图太大，导出后约 ${estimate.width}×${estimate.height} 像素，文字会明显偏小。\n` +
@@ -1035,6 +1041,8 @@ async function exportGraphImage() {
       detail: `焦点 @${currentNode.value?.uname || '未知'} · ${
         MODE_LABELS[mode.value]
       } · ${stats.participants} 人参与 · 最大 ${stats.maxDepth} 层 · 跨度 ${stats.span}`,
+      videoTitle: props.videoTitle,
+      videoBvid: props.videoBvid,
       footerLeft: 'ZenithFlow · B站讨论关系 · 节点背景色代表不同用户',
       footerRight: `导出于 ${formatFullTime(Math.floor(Date.now() / 1000))}`,
       theme: readExportTheme(el),

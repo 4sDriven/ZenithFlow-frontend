@@ -45,6 +45,8 @@ export type GraphExportOptions = {
   title: string
   subtitle: string
   detail: string
+  videoTitle?: string
+  videoBvid?: string
   footerLeft: string
   footerRight: string
   theme: GraphExportTheme
@@ -64,6 +66,8 @@ export type GraphExportImage = {
 
 const OUTER_PADDING = 32
 const HEADER_HEIGHT = 88
+const VIDEO_CARD_HEIGHT = 46
+const VIDEO_CARD_GAP = 16
 const FOOTER_HEIGHT = 44
 // 浏览器 canvas 单边上限 16384、总面积上限约 268M 像素；留出安全余量。
 const MAX_SIDE = 16000
@@ -86,10 +90,12 @@ export type GraphExportEstimate = {
 export function estimateThreadGraphImageSize(
   graphWidth: number,
   graphHeight: number,
+  withVideoCard = false,
 ): GraphExportEstimate {
+  const headerHeight = HEADER_HEIGHT + (withVideoCard ? VIDEO_CARD_HEIGHT + VIDEO_CARD_GAP : 0)
   const width = Math.round(Math.max(320, graphWidth) + OUTER_PADDING * 2)
   const height = Math.round(
-    Math.max(120, graphHeight) + OUTER_PADDING * 2 + HEADER_HEIGHT + FOOTER_HEIGHT,
+    Math.max(120, graphHeight) + OUTER_PADDING * 2 + headerHeight + FOOTER_HEIGHT,
   )
   const scale = pickScale(width, height)
   return { width: Math.round(width * scale), height: Math.round(height * scale), scale }
@@ -100,8 +106,10 @@ export async function renderThreadGraphPng(
 ): Promise<GraphExportImage> {
   const graphWidth = Math.max(320, options.width)
   const graphHeight = Math.max(120, options.height)
+  const hasVideoCard = Boolean(options.videoTitle?.trim() || options.videoBvid?.trim())
+  const headerHeight = HEADER_HEIGHT + (hasVideoCard ? VIDEO_CARD_HEIGHT + VIDEO_CARD_GAP : 0)
   const width = Math.round(graphWidth + OUTER_PADDING * 2)
-  const height = Math.round(graphHeight + OUTER_PADDING * 2 + HEADER_HEIGHT + FOOTER_HEIGHT)
+  const height = Math.round(graphHeight + OUTER_PADDING * 2 + headerHeight + FOOTER_HEIGHT)
 
   const scale = pickScale(width, height)
   const canvas = document.createElement('canvas')
@@ -121,10 +129,10 @@ export async function renderThreadGraphPng(
   ctx.fillStyle = theme.surface2
   ctx.fillRect(0, 0, width, height)
   ctx.fillStyle = theme.surface
-  ctx.fillRect(0, 0, width, HEADER_HEIGHT)
+  ctx.fillRect(0, 0, width, headerHeight)
   ctx.fillRect(0, height - FOOTER_HEIGHT, width, FOOTER_HEIGHT)
   ctx.fillStyle = theme.border
-  ctx.fillRect(0, HEADER_HEIGHT - 1, width, 1)
+  ctx.fillRect(0, headerHeight - 1, width, 1)
   ctx.fillRect(0, height - FOOTER_HEIGHT, width, 1)
 
   const headerPad = 24
@@ -144,6 +152,10 @@ export async function renderThreadGraphPng(
   )
   ctx.fillText(ellipsize(ctx, options.detail, width - headerPad * 2), headerPad, 78)
 
+  if (hasVideoCard) {
+    drawVideoCard(ctx, options, width, headerPad, HEADER_HEIGHT - 4, font, theme)
+  }
+
   // 页脚文字
   ctx.textBaseline = 'middle'
   ctx.font = `400 12px ${font}`
@@ -154,7 +166,7 @@ export async function renderThreadGraphPng(
   ctx.fillText(options.footerRight, width - headerPad, height - FOOTER_HEIGHT / 2)
 
   const originX = OUTER_PADDING
-  const originY = HEADER_HEIGHT + OUTER_PADDING
+  const originY = headerHeight + OUTER_PADDING
 
   drawEdges(ctx, options, originX, originY, theme)
 
@@ -164,6 +176,79 @@ export async function renderThreadGraphPng(
 
   const blob = await canvasToBlob(canvas)
   return { blob, width: canvas.width, height: canvas.height, scale }
+}
+
+function drawVideoCard(
+  ctx: CanvasRenderingContext2D,
+  options: GraphExportOptions,
+  width: number,
+  pad: number,
+  y: number,
+  font: string,
+  theme: GraphExportTheme,
+) {
+  const x = pad
+  const cardH = VIDEO_CARD_HEIGHT
+  const maxCardW = width - pad * 2
+  const title = (options.videoTitle ?? '').trim() || '未知视频'
+  const bvid = (options.videoBvid ?? '').trim()
+
+  ctx.font = `400 11px ${font}`
+  const chipW = bvid ? ctx.measureText(bvid).width + 16 : 0
+  ctx.font = `600 14px ${font}`
+  const titleW = ctx.measureText(title).width
+  const chromeW = 12 + 38 + 12 + (bvid ? 12 + chipW : 0) + 12
+  const cardW = Math.min(maxCardW, Math.max(320, chromeW + titleW))
+  const centerY = y + cardH / 2
+
+  roundRect(ctx, x, y, cardW, cardH, theme.radius)
+  ctx.fillStyle = theme.surface2
+  ctx.fill()
+  ctx.strokeStyle = theme.border
+  ctx.lineWidth = 1
+  ctx.stroke()
+
+  // 「视频」小标签
+  const badgeW = 38
+  const badgeH = 20
+  const badgeX = x + 12
+  roundRect(ctx, badgeX, centerY - badgeH / 2, badgeW, badgeH, 4)
+  ctx.fillStyle = rgba(theme.primary, 0.12)
+  ctx.fill()
+  ctx.fillStyle = theme.primary
+  ctx.font = `500 10px ${font}`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('视频', badgeX + badgeW / 2, centerY + 1)
+
+  // 右侧视频 ID（BV 号）
+  let titleRight = x + cardW - 12
+  if (bvid) {
+    const chipH = 20
+    const chipX = x + cardW - 12 - chipW
+    roundRect(ctx, chipX, centerY - chipH / 2, chipW, chipH, 4)
+    ctx.fillStyle = theme.surface
+    ctx.fill()
+    ctx.strokeStyle = theme.border
+    ctx.stroke()
+    ctx.fillStyle = theme.muted
+    ctx.font = `400 11px ${font}`
+    ctx.textAlign = 'center'
+    ctx.fillText(bvid, chipX + chipW / 2, centerY + 1)
+    titleRight = chipX - 12
+  }
+
+  // 视频标题
+  const titleX = badgeX + badgeW + 12
+  if (titleRight > titleX) {
+    ctx.fillStyle = theme.text
+    ctx.font = `600 14px ${font}`
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(ellipsize(ctx, title, titleRight - titleX), titleX, centerY + 1)
+  }
+
+  ctx.textAlign = 'left'
 }
 
 function pickScale(width: number, height: number): number {
