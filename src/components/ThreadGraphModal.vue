@@ -4,6 +4,7 @@ import { ApiError, apiFetch } from '../lib/api'
 import {
   estimateThreadGraphImageSize,
   renderThreadGraphPng,
+  type GraphExportOptions,
   type GraphExportTheme,
 } from '../lib/thread-graph-export'
 
@@ -987,11 +988,55 @@ async function exportGraphImage() {
   const el = viewport.value
   if (exporting.value || !current.nodes.length || !el) return
 
-  const estimate = estimateThreadGraphImageSize(
-    current.width,
-    current.height,
-    Boolean(props.videoTitle?.trim() || props.videoBvid?.trim()),
-  )
+  const stats = focusStats.value
+  const options: GraphExportOptions = {
+    nodes: current.nodes.map((item) => ({
+      rpid: item.node.rpid,
+      mid: item.node.mid,
+      uname: item.node.uname,
+      message: item.node.message,
+      ctime: item.node.ctime,
+      like: item.node.like,
+      replyCount: item.node.replyCount,
+      isUp: item.node.isUp,
+      deleted: Boolean(item.node.deleted),
+      isMore: Boolean(item.node.isMore),
+      moreCount: item.node.moreCount ?? 0,
+      x: item.x,
+      y: item.y,
+      w: item.w,
+      h: item.h,
+    })),
+    edges: current.edges.map((edge) => ({
+      from: { x: edge.from.x, y: edge.from.y, w: edge.from.w, h: edge.from.h },
+      to: { x: edge.to.x, y: edge.to.y, w: edge.to.w, h: edge.to.h },
+      fromRpid: edge.from.node.rpid,
+      toRpid: edge.to.node.rpid,
+    })),
+    width: current.width,
+    height: current.height,
+    title: '讨论关系',
+    subtitle: `主评论 ${rootNode.value?.uname || '未知'} · 子评论 ${
+      data.value?.total ?? 0
+    } 条 · 图中 ${current.nodes.length} 个节点`,
+    detail: `焦点 @${currentNode.value?.uname || '未知'} · ${
+      MODE_LABELS[mode.value]
+    } · ${stats.participants} 人参与 · 最大 ${stats.maxDepth} 层 · 跨度 ${stats.span}`,
+    videoTitle: props.videoTitle,
+    videoBvid: props.videoBvid,
+    footerLeft: 'ZenithFlow · B站讨论关系 · 节点背景色代表不同用户',
+    footerRight: `导出于 ${formatFullTime(Math.floor(Date.now() / 1000))}`,
+    theme: readExportTheme(el),
+    colorOf: userColor,
+    dimmed: new Set(
+      current.nodes.filter((item) => isDimmed(item.node)).map((item) => item.node.rpid),
+    ),
+    selected: selectedRpid.value,
+    target: currentTarget.value,
+    ancestors: ancestorIds.value,
+  }
+
+  const estimate = estimateThreadGraphImageSize(options)
   if (estimate.scale < 0.6) {
     const ok = window.confirm(
       `当前关系图太大，导出后约 ${estimate.width}×${estimate.height} 像素，文字会明显偏小。\n` +
@@ -1007,53 +1052,7 @@ async function exportGraphImage() {
     await nextTick()
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
 
-    const stats = focusStats.value
-    const image = await renderThreadGraphPng({
-      nodes: current.nodes.map((item) => ({
-        rpid: item.node.rpid,
-        mid: item.node.mid,
-        uname: item.node.uname,
-        message: item.node.message,
-        ctime: item.node.ctime,
-        like: item.node.like,
-        replyCount: item.node.replyCount,
-        isUp: item.node.isUp,
-        deleted: Boolean(item.node.deleted),
-        isMore: Boolean(item.node.isMore),
-        moreCount: item.node.moreCount ?? 0,
-        x: item.x,
-        y: item.y,
-        w: item.w,
-        h: item.h,
-      })),
-      edges: current.edges.map((edge) => ({
-        from: { x: edge.from.x, y: edge.from.y, w: edge.from.w, h: edge.from.h },
-        to: { x: edge.to.x, y: edge.to.y, w: edge.to.w, h: edge.to.h },
-        fromRpid: edge.from.node.rpid,
-        toRpid: edge.to.node.rpid,
-      })),
-      width: current.width,
-      height: current.height,
-      title: '讨论关系',
-      subtitle: `主评论 ${rootNode.value?.uname || '未知'} · 子评论 ${
-        data.value?.total ?? 0
-      } 条 · 图中 ${current.nodes.length} 个节点`,
-      detail: `焦点 @${currentNode.value?.uname || '未知'} · ${
-        MODE_LABELS[mode.value]
-      } · ${stats.participants} 人参与 · 最大 ${stats.maxDepth} 层 · 跨度 ${stats.span}`,
-      videoTitle: props.videoTitle,
-      videoBvid: props.videoBvid,
-      footerLeft: 'ZenithFlow · B站讨论关系 · 节点背景色代表不同用户',
-      footerRight: `导出于 ${formatFullTime(Math.floor(Date.now() / 1000))}`,
-      theme: readExportTheme(el),
-      colorOf: userColor,
-      dimmed: new Set(
-        current.nodes.filter((item) => isDimmed(item.node)).map((item) => item.node.rpid),
-      ),
-      selected: selectedRpid.value,
-      target: currentTarget.value,
-      ancestors: ancestorIds.value,
-    })
+    const image = await renderThreadGraphPng(options)
 
     downloadBlob(image.blob, buildExportFileName())
     const size = `${image.width}×${image.height}`

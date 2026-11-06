@@ -87,31 +87,130 @@ export type GraphExportEstimate = {
   scale: number
 }
 
+type ExportLayout = {
+  width: number
+  height: number
+  scale: number
+  headerHeight: number
+  nodes: GraphExportNode[]
+  edges: GraphExportEdge[]
+}
+
+const BODY_LINE_HEIGHT = 16
+const CARD_PADDING_Y = 9
+const AVATAR_SIZE = 21
+const CARD_FOOT_HEIGHT = 16
+const BODY_TOP_OFFSET = CARD_PADDING_Y + AVATAR_SIZE + 5
+
+function hasVideoCard(options: GraphExportOptions): boolean {
+  return Boolean(options.videoTitle?.trim() || options.videoBvid?.trim())
+}
+
+function createMeasureContext(): CanvasRenderingContext2D {
+  const canvas = document.createElement('canvas')
+  canvas.width = 1
+  canvas.height = 1
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('当前浏览器不支持导出图片')
+  return ctx
+}
+
+// 导出用的纵向重排：保持列（x）不变，按行取最高卡片，卡片高度随正文行数增长，
+// 从而把评论全文画出来而不裁成 3 行；行间距沿用界面布局的间隔。
+function buildExportLayout(
+  ctx: CanvasRenderingContext2D,
+  options: GraphExportOptions,
+): ExportLayout {
+  const headerHeight =
+    HEADER_HEIGHT + (hasVideoCard(options) ? VIDEO_CARD_HEIGHT + VIDEO_CARD_GAP : 0)
+  const nodes = options.nodes.map((node) => ({ ...node }))
+
+  const rows = new Map<number, GraphExportNode[]>()
+  for (const node of nodes) {
+    const key = Math.round(node.y)
+    const list = rows.get(key)
+    if (list) list.push(node)
+    else rows.set(key, [node])
+  }
+  const ordered = [...rows.entries()].sort((a, b) => a[0] - b[0])
+  const baseHeight = options.nodes.length ? Math.max(...options.nodes.map((node) => node.h)) : 112
+  const firstTop = ordered.length ? (ordered[0]?.[0] ?? 28) : 28
+  const rowGap =
+    ordered.length > 1 ? Math.max(24, (ordered[1]?.[0] ?? 0) - (ordered[0]?.[0] ?? 0) - baseHeight) : 56
+
+  let rowTop = firstTop
+  for (const [, list] of ordered) {
+    let rowHeight = baseHeight
+    for (const node of list) {
+      let naturalHeight = baseHeight
+      if (!node.isMore) {
+        ctx.font = `400 11px ${options.theme.fontFamily}`
+        const contentWidth = Math.max(24, node.w - 23)
+        const lines = wrapLines(ctx, node.message, contentWidth, Number.POSITIVE_INFINITY)
+        naturalHeight = Math.max(
+          baseHeight,
+          BODY_TOP_OFFSET + lines.length * BODY_LINE_HEIGHT + CARD_FOOT_HEIGHT + CARD_PADDING_Y,
+        )
+      }
+      if (naturalHeight > rowHeight) rowHeight = naturalHeight
+      node.h = naturalHeight
+    }
+    for (const node of list) {
+      node.y = rowTop
+    }
+    rowTop += rowHeight + rowGap
+  }
+
+  const graphWidth = Math.max(320, options.width)
+  const graphHeight = ordered.length
+    ? rowTop - rowGap + firstTop
+    : Math.max(120, options.height)
+  const width = Math.round(graphWidth + OUTER_PADDING * 2)
+  const height = Math.round(graphHeight + OUTER_PADDING * 2 + headerHeight + FOOTER_HEIGHT)
+
+  const byRpid = new Map(nodes.map((node) => [node.rpid, node]))
+  const edges: GraphExportEdge[] = []
+  for (const edge of options.edges) {
+    const from = byRpid.get(edge.fromRpid)
+    const to = byRpid.get(edge.toRpid)
+    if (!from || !to) continue
+    edges.push({
+      from: { x: from.x, y: from.y, w: from.w, h: from.h },
+      to: { x: to.x, y: to.y, w: to.w, h: to.h },
+      fromRpid: edge.fromRpid,
+      toRpid: edge.toRpid,
+    })
+  }
+
+  return {
+    width,
+    height,
+    scale: pickScale(width, height),
+    headerHeight,
+    nodes,
+    edges,
+  }
+}
+
 export function estimateThreadGraphImageSize(
-  graphWidth: number,
-  graphHeight: number,
-  withVideoCard = false,
+  options: GraphExportOptions,
 ): GraphExportEstimate {
-  const headerHeight = HEADER_HEIGHT + (withVideoCard ? VIDEO_CARD_HEIGHT + VIDEO_CARD_GAP : 0)
-  const width = Math.round(Math.max(320, graphWidth) + OUTER_PADDING * 2)
-  const height = Math.round(
-    Math.max(120, graphHeight) + OUTER_PADDING * 2 + headerHeight + FOOTER_HEIGHT,
-  )
-  const scale = pickScale(width, height)
-  return { width: Math.round(width * scale), height: Math.round(height * scale), scale }
+  const ctx = createMeasureContext()
+  const layout = buildExportLayout(ctx, options)
+  return {
+    width: Math.round(layout.width * layout.scale),
+    height: Math.round(layout.height * layout.scale),
+    scale: layout.scale,
+  }
 }
 
 export async function renderThreadGraphPng(
   options: GraphExportOptions,
 ): Promise<GraphExportImage> {
-  const graphWidth = Math.max(320, options.width)
-  const graphHeight = Math.max(120, options.height)
-  const hasVideoCard = Boolean(options.videoTitle?.trim() || options.videoBvid?.trim())
-  const headerHeight = HEADER_HEIGHT + (hasVideoCard ? VIDEO_CARD_HEIGHT + VIDEO_CARD_GAP : 0)
-  const width = Math.round(graphWidth + OUTER_PADDING * 2)
-  const height = Math.round(graphHeight + OUTER_PADDING * 2 + headerHeight + FOOTER_HEIGHT)
+  const measureCtx = createMeasureContext()
+  const layout = buildExportLayout(measureCtx, options)
+  const { width, height, scale, headerHeight } = layout
 
-  const scale = pickScale(width, height)
   const canvas = document.createElement('canvas')
   canvas.width = Math.max(1, Math.round(width * scale))
   canvas.height = Math.max(1, Math.round(height * scale))
@@ -152,7 +251,7 @@ export async function renderThreadGraphPng(
   )
   ctx.fillText(ellipsize(ctx, options.detail, width - headerPad * 2), headerPad, 78)
 
-  if (hasVideoCard) {
+  if (hasVideoCard(options)) {
     drawVideoCard(ctx, options, width, headerPad, HEADER_HEIGHT - 4, font, theme)
   }
 
@@ -168,9 +267,9 @@ export async function renderThreadGraphPng(
   const originX = OUTER_PADDING
   const originY = headerHeight + OUTER_PADDING
 
-  drawEdges(ctx, options, originX, originY, theme)
+  drawEdges(ctx, layout.edges, options.selected, originX, originY, theme)
 
-  for (const node of options.nodes) {
+  for (const node of layout.nodes) {
     drawNode(ctx, node, options, originX, originY)
   }
 
@@ -259,14 +358,14 @@ function pickScale(width: number, height: number): number {
 
 function drawEdges(
   ctx: CanvasRenderingContext2D,
-  options: GraphExportOptions,
+  edges: GraphExportEdge[],
+  selected: string,
   originX: number,
   originY: number,
   theme: GraphExportTheme,
 ) {
-  const selected = options.selected
   ctx.lineCap = 'round'
-  for (const edge of options.edges) {
+  for (const edge of edges) {
     const fromX = originX + edge.from.x + edge.from.w / 2
     const fromY = originY + edge.from.y + edge.from.h
     const toX = originX + edge.to.x + edge.to.w / 2
@@ -452,7 +551,7 @@ function drawNode(
   } else {
     ctx.fillStyle = node.deleted ? theme.muted : theme.text
     ctx.font = `400 11px ${font}`
-    const lines = wrapLines(ctx, node.message, contentRight - contentX, 3)
+    const lines = wrapLines(ctx, node.message, contentRight - contentX)
     for (let index = 0; index < lines.length; index += 1) {
       ctx.fillText(lines[index] ?? '', contentX, bodyTop + 10 + index * bodyLineHeight)
     }
@@ -563,7 +662,7 @@ function wrapLines(
   ctx: CanvasRenderingContext2D,
   text: string,
   maxWidth: number,
-  maxLines: number,
+  maxLines: number = Number.POSITIVE_INFINITY,
 ): string[] {
   const normalized = text.replace(/\s+/g, ' ').trim()
   if (!normalized || maxWidth <= 0) return []
