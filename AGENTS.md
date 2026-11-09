@@ -27,16 +27,32 @@ Vue 3 + Vite + TypeScript + Vue Router + Pinia。
 | `/studio/:id` | `views/StudioDetailView.vue` | 分镜、配音、成片 |
 | `/kb` | `views/KnowledgeView.vue` | 知识库 |
 | `/english` | `views/EnglishView.vue` | 英语口语（admin） |
-| `/bili` | `views/BiliCommentsView.vue` | B站搜索 + 评论 |
+| `/bili` | `views/BiliCommentsView.vue` | B站视频 / UP 主搜索 + 评论 |
 | `/users` | `views/UsersView.vue` | 用户管理（admin） |
 
 ## B站页面（`/bili`）
 
-- 双模式，状态全部写在 URL：
-  - 搜索：`?keyword=&page=`
-  - 评论：`?bvid=&keyword=&spage=&page=&sort=hot|latest`
-  - 兼容旧参数 `?input=<链接/BV>`
-- 搜索 20 条/页，评论 30 条/页，子评论 10 条/页；搜索、评论、子评论各自分页
+- 三个标签：搜视频 / 搜UP主 / 链接·BV，状态全部写在 URL：
+  - 视频搜索：`?keyword=&page=`
+  - UP 主搜索：`?stype=up&keyword=&upage=`
+  - UP 主投稿：`?stype=up&up=<mid>&uppage=&uporder=pubdate|click`（带 `keyword/upage` 便于返回列表）
+  - 评论：`?bvid=&keyword=&spage=&sort=hot|latest&view=grid&loaded=100`；从 UP 投稿进入时改为 `?bvid=&stype=up&up=&uppage=&uporder=...`
+  - 兼容旧参数 `?input=<链接/BV>` 和旧评论页码 `?page=`
+- 主评论为无限滚动，没有页码分页条：首屏 100 条，滚动到距底部 240px 时自动加 50 条；`loaded` 记录已加载数量，刷新时按 50 条一批补到该数量（上限 1000）
+- 评论视图支持「列式 / 卡片」切换，默认列式；`view=grid` 为卡片视图
+- 卡片视图用 CSS 多列实现瀑布流（`column-count`，≥1280 三列、860~1280 两列、<860 单列），卡片 `break-inside: avoid`、高度随评论内容自适应，正文不截断；展开子评论时后续卡片可能重新平衡换列，属正常现象
+- 视频搜索 20 条/页；UP 主搜索 20 条/页、最多 50 页；UP 投稿 20 条/页、**最多 10 页 / 200 条**（B 站游客限制），超出时页面提示「仅显示前 200 个投稿」
+- UP 投稿可切「最新发布 / 最多播放」；列表不含点赞/评论数，因此不显示热度温度计
+- 评论页返回按钮按来源回到视频搜索或 UP 投稿列表，并恢复滚动位置
+- 视频搜索结果里的 UP 名字可点击，直接切到「搜UP主」搜该名字（`@click.stop`，不要误触进评论）
+- 顶部右侧有 B站账号入口：未绑定显示「B站登录」，已绑定显示 `B站：昵称` + 重新绑定 / 解绑；扫码弹窗为 `BiliLoginModal.vue`
+- 扫码二维码由前端 `qrcode` 库在 canvas 本地生成，不请求远程图片；这是「页面不加载图片」规则的唯一例外，不显示 B站头像/封面
+- 绑定接口：`POST /api/bili/auth/qrcode`、`GET /api/bili/auth/qrcode/poll?key=`、`GET /api/bili/auth/me`、`DELETE /api/bili/auth`；登录成功只接收 `mid/uname` 等摘要，Cookie 永不进前端
+- 点赞 / 回复需要先绑定 B 站账号：主评论和子评论都有「赞」「回复」按钮；未绑定或已过期时点击直接打开 `BiliLoginModal` 并在页头提示
+- 点赞为乐观更新（先改本地计数再请求 `POST /api/bili/comments/like`，失败回滚）；B 站评论列表不返回当前账号点赞状态，所以已赞状态只在本会话内记忆，刷新后按未赞显示
+- 回复/发评论复用 `BiliReplyModal.vue`：主评论回复带 `root=parent=主评论rpid`，楼中楼回复带 `root=主评论rpid&parent=子评论rpid`，顶部输入框发顶层评论（`root=parent=0`）；发布成功后本地回显并把子评论数 +1
+- 发布接口 `POST /api/bili/comments`；内容 1~1000 字，提交中禁用按钮，错误直接显示在弹窗内
+- 搜索 20 条/页，主评论首屏 100 条 / 触底 +50 条，子评论 10 条/页；子评论仍用页码分页
 - 子评论翻页要**替换**当前列表，不要「加载更多」累加
 - 子评论使用固定高度滚动窗口（`.sub-scroll`，max-height 280px），分页条固定在窗口底部、不随列表滚动，外层页面高度不随展开变化
 - 子评论正文默认 3 行截断，溢出显示「展开/收起」；`SubReplyItem.vue` 负责渲染与截断
@@ -58,9 +74,11 @@ Vue 3 + Vite + TypeScript + Vue Router + Pinia。
 ## 通用组件
 
 - `components/ChangePasswordModal.vue`：修改密码弹窗（当前密码 + 新密码 + 确认），由 `AppLayout` 顶栏的锁图标打开
+- `components/BiliLoginModal.vue`：B站扫码登录弹窗（本地 canvas 二维码、2 秒轮询、刷新/失效/成功状态），由 `/bili` 顶部账号入口打开
+- `components/BiliReplyModal.vue`：回复 / 发评论弹窗（1000 字上限、字数统计、Ctrl/⌘+Enter 发布、提交中禁用、错误展示）
 - `components/HeatMeter.vue`：热度温度计
 - `components/SubReplyItem.vue`：子评论条目（3 行截断、回复对象、展开/收起、关系图入口）
-- `components/ThreadGraphModal.vue`：讨论关系图弹窗（分层布局、用户色背景、缩放平移、分支/参与者筛选、时间进度、导出高清 PNG）
+- `components/ThreadGraphModal.vue`：讨论关系图弹窗（分层布局、用户色背景、缩放平移、分支/参与者筛选、时间进度、导出高清 PNG）；只能点右上角 ×（或 Esc）关闭，点遮罩 / 拖动后在遮罩松开不关闭
 - `lib/thread-graph-export.ts`：关系图导出（按节点坐标重绘到 canvas，页眉/页脚/图例，3x 输出并按 canvas 上限自动降级）
 
 ## 约定

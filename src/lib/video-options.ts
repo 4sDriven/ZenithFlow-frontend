@@ -32,6 +32,14 @@ export const VIDEO_PRESETS: VideoPreset[] = [
     price: 0.9,
     audio: true,
   },
+  {
+    key: 'ultra',
+    label: '超清 1080P（¥1.2/秒 · 带音频）',
+    model: 'happyhorse-1.1-t2v',
+    resolution: '1080P',
+    price: 1.2,
+    audio: true,
+  },
 ]
 
 export const VOICES = [

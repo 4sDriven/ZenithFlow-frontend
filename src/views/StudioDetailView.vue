@@ -80,6 +80,7 @@ async function load() {
     )
     project.value = data.project
     shots.value = data.shots
+    if (data.shots.length > 0) shotCount.value = data.shots.length
     applySettingsToForm(data.project)
     error.value = ''
     ensurePolling()

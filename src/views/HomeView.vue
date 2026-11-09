@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import AppLayout from '../components/AppLayout.vue'
 import StatCard from '../components/StatCard.vue'
+import QwenBalanceCard from '../components/QwenBalanceCard.vue'
 
 const stats = [
   {
@@ -61,6 +62,10 @@ const barY = (v: number) => BH - BPAD - barH(v)
 
 <template>
   <AppLayout>
+    <div class="balance-row">
+      <QwenBalanceCard />
+    </div>
+
     <div class="stats">
       <StatCard v-for="s in stats" :key="s.label" v-bind="s" />
     </div>
@@ -133,6 +138,11 @@ const barY = (v: number) => BH - BPAD - barH(v)
 </template>
 
 <style scoped>
+.balance-row {
+  display: grid;
+  grid-template-columns: minmax(0, 320px);
+}
+
 .stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -212,6 +222,10 @@ const barY = (v: number) => BH - BPAD - barH(v)
 
 @media (max-width: 720px) {
   .stats {
+    grid-template-columns: 1fr;
+  }
+
+  .balance-row {
     grid-template-columns: 1fr;
   }
 }

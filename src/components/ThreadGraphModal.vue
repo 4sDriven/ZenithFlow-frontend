@@ -1117,7 +1117,7 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="overlay" @click.self="close">
+    <div v-if="open" class="overlay">
       <div class="dialog card" role="dialog" aria-modal="true" aria-labelledby="thread-title">
         <header class="dialog-head">
           <div class="title-wrap">

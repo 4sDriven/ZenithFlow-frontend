@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ThemeToggle from './ThemeToggle.vue'
+import ChangePasswordModal from './ChangePasswordModal.vue'
 import { useAuthStore } from '../stores/auth'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+
+const showPasswordModal = ref(false)
+
+defineProps<{ fill?: boolean }>()
 
 const baseNav = [
   {
@@ -24,9 +29,33 @@ const baseNav = [
       'M5 18h8a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2z',
     ],
   },
+  {
+    key: 'kb',
+    label: '知识库',
+    to: '/kb',
+    paths: [
+      'M4 19.5A2.5 2.5 0 0 1 6.5 17H20',
+      'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z',
+    ],
+  },
+  {
+    key: 'bili',
+    label: 'B站',
+    to: '/bili',
+    paths: ['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'],
+  },
 ]
 
 const adminNav = [
+  {
+    key: 'english',
+    label: '英语口语',
+    to: '/english',
+    paths: [
+      'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z',
+      'M19 10v2a7 7 0 0 1-14 0v-2M12 19v3',
+    ],
+  },
   {
     key: 'users',
     label: '用户管理',
@@ -109,21 +138,39 @@ function logout() {
       <header class="topbar">
         <div class="crumb"><span class="muted">首页</span> / {{ currentTitle }}</div>
         <div class="top-actions">
+          <button class="icon-btn" title="修改密码" @click="showPasswordModal = true">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="3" y="11" width="18" height="10" rx="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+          </button>
           <ThemeToggle />
         </div>
       </header>
 
-      <main class="content">
+      <main class="content" :class="{ 'content-fill': fill }">
         <slot />
       </main>
     </div>
+
+    <ChangePasswordModal :open="showPasswordModal" @close="showPasswordModal = false" />
   </div>
 </template>
 
 <style scoped>
 .layout {
   display: flex;
-  min-height: 100svh;
+  height: 100svh;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -135,6 +182,7 @@ function logout() {
   padding: 16px;
   background: var(--surface);
   border-right: 1px solid var(--border);
+  overflow-y: auto;
 }
 
 .logo {
@@ -230,6 +278,7 @@ function logout() {
 .main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -260,10 +309,18 @@ function logout() {
 }
 
 .content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 20px;
   padding: 20px;
+}
+
+/* 页面自己管理内部滚动时使用：固定头尾，只让中间区域滚动 */
+.content-fill {
+  overflow: hidden;
 }
 
 @media (max-width: 720px) {
