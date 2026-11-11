@@ -42,8 +42,35 @@ const tocOpen = ref(true)
 const scrollPositions = new Map<string, number>()
 let persistTimer: number | undefined
 
-/** 本次路由变化是否来自浏览器前进 / 后退（popstate） */
-let historyNavPending = false
+/** 定位过程会短暂把内容清空，这段时间的滚动事件不能覆盖已记录的位置 */
+let scrollSaveLocked = true
+
+/** vue-router 写在 history.state 里的序号，用来判断这次是前进 / 后退还是新打开 */
+let lastPosition = historyPosition()
+const seenPositions = new Set<number>()
+/** 由本页主动 push 的导航（点链接 / 输入地址），一定从顶部开始 */
+let pushingByClick = false
+
+function historyPosition(): number {
+  const state = window.history.state as { position?: number } | null
+  return typeof state?.position === 'number' ? state.position : 0
+}
+
+/**
+ * 是否为历史导航（后退 / 前进）。
+ * 不能依赖 popstate：实测 Vue Router 的 watch 有时比 popstate 先触发。
+ * 后退一定让 position 变小；前进回到已出现过的 position；新 push 的 position 是新的。
+ */
+function isHistoryTraversal(): boolean {
+  const position = historyPosition()
+  const byClick = pushingByClick
+  const traversal = !byClick && (position < lastPosition || seenPositions.has(position))
+
+  lastPosition = position
+  seenPositions.add(position)
+  pushingByClick = false
+  return traversal
+}
 
 function readScrollPositions() {
   try {
@@ -75,9 +102,34 @@ function persistScrollPositions() {
 function onBodyScroll() {
   const el = bodyRef.value
   const target = currentTarget.value
-  if (!el || !target || loading.value) return
+  if (!el || !target || loading.value || scrollSaveLocked) return
   scrollPositions.set(target, el.scrollTop)
   persistScrollPositions()
+}
+
+/**
+ * 恢复滚动位置。布局偶尔比 DOM 晚一帧，被 clamp 到更小的值时重试，
+ * 期间若已跳到别的地址就放弃。
+ */
+function restoreScrollTo(top: number, target: string, attempt = 0) {
+  requestAnimationFrame(() => {
+    if (currentTarget.value !== target) return
+    const el = bodyRef.value
+    if (!el) return
+    el.scrollTop = top
+    if (Math.abs(el.scrollTop - top) > 2 && attempt < 3) {
+      restoreScrollTo(top, target, attempt + 1)
+    }
+  })
+}
+
+/** 定位完成后隔两帧再解锁，避开内容重排产生的滚动事件 */
+function unlockScrollSave() {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      scrollSaveLocked = false
+    })
+  })
 }
 
 const currentTarget = computed(() =>
@@ -141,12 +193,12 @@ async function load(target: string, options: { restoreScroll?: boolean } = {}) {
   }
 
   // 后退 / 前进要回到上次读到的地方，普通点进去则从头开始
-  const restore = options.restoreScroll ?? historyNavPending
-  historyNavPending = false
+  const restore = options.restoreScroll ?? false
 
   // 必须在切换成 loading 视图之前取，否则滚动条被夹到 0 会把记录覆盖掉
   const savedPos = restore ? scrollPositions.get(target) : undefined
 
+  scrollSaveLocked = true
   loading.value = true
   error.value = ''
 
@@ -166,10 +218,7 @@ async function load(target: string, options: { restoreScroll?: boolean } = {}) {
     const anchor = hashAnchor(target)
 
     if (savedPos !== undefined && savedPos > 0) {
-      // 等一帧让布局稳定，再恢复位置；期间若又跳走就放弃
-      requestAnimationFrame(() => {
-        if (currentTarget.value === target) bodyRef.value?.scrollTo({ top: savedPos })
-      })
+      restoreScrollTo(savedPos, target)
     } else if (!restore && anchor) {
       scrollToAnchor(anchor)
       requestAnimationFrame(() => {
@@ -179,23 +228,25 @@ async function load(target: string, options: { restoreScroll?: boolean } = {}) {
       bodyRef.value?.scrollTo({ top: 0 })
     }
 
+    unlockScrollSave()
     if (window.innerWidth < 1100) tocOpen.value = false
   } catch (err) {
     page.value = null
     error.value = err instanceof ApiError ? err.message : '读取失败，请稍后重试'
     loading.value = false
+    unlockScrollSave()
   }
 }
 
 function open(input?: string) {
   const raw = (input ?? urlInput.value).trim()
   if (!raw) return
-  // 手动输入地址视为新导航，不要沿用历史位置
-  historyNavPending = false
   if (raw === currentTarget.value) {
+    // 重新读取同一个地址：保持当前位置
     void load(raw, { restoreScroll: true })
     return
   }
+  pushingByClick = true
   void router.push({ path: '/wiki', query: { u: raw } })
 }
 
@@ -238,7 +289,10 @@ function onDocClick(event: MouseEvent) {
   if (href.startsWith('/wiki?u=')) {
     event.preventDefault()
     const next = new URL(href, window.location.origin).searchParams.get('u')
-    if (next) void router.push({ path: '/wiki', query: { u: next } })
+    if (next) {
+      pushingByClick = true
+      void router.push({ path: '/wiki', query: { u: next } })
+    }
   }
 }
 
@@ -268,7 +322,8 @@ watch(
   () => route.query.u,
   (value) => {
     if (typeof value === 'string' && value) {
-      void load(value, { restoreScroll: historyNavPending || firstLoad })
+      const traversing = isHistoryTraversal()
+      void load(value, { restoreScroll: traversing || firstLoad })
       firstLoad = false
     } else {
       page.value = null
@@ -277,25 +332,14 @@ watch(
   { immediate: true },
 )
 
-/** 浏览器前进 / 后退（含工具栏的 ← →）都会先触发 popstate，用来标记本次是历史导航 */
-function onPopState() {
-  historyNavPending = true
-  // 极端情况下（同地址、没有真正发生路由变化）标记会在几秒后自动失效
-  window.setTimeout(() => {
-    historyNavPending = false
-  }, 3000)
-}
-
 onMounted(() => {
   const storedFont = Number(localStorage.getItem(FONT_KEY))
   if (storedFont >= 12 && storedFont <= 18) fontSize.value = storedFont
   history.value = readHistory()
-  window.addEventListener('popstate', onPopState)
   urlInput.value = currentTarget.value || localStorage.getItem(URL_KEY) || ''
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('popstate', onPopState)
   window.clearTimeout(persistTimer)
 })
 </script>
