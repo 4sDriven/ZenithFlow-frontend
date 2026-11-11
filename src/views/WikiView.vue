@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '../components/AppLayout.vue'
 import { ApiError, apiFetch } from '../lib/api'
@@ -26,6 +26,7 @@ const router = useRouter()
 const URL_KEY = 'zf-wiki-url'
 const HISTORY_KEY = 'zf-wiki-history'
 const FONT_KEY = 'zf-wiki-font'
+const SCROLL_KEY = 'zf-wiki-scroll'
 
 const urlInput = ref('')
 const page = ref<WikiPage | null>(null)
@@ -36,6 +37,48 @@ const history = ref<string[]>([])
 const fontSize = ref(14)
 const bodyRef = ref<HTMLElement | null>(null)
 const tocOpen = ref(true)
+
+/** 每个页面地址记住的滚动位置，后退 / 前进时恢复 */
+const scrollPositions = new Map<string, number>()
+let persistTimer: number | undefined
+
+/** 本次路由变化是否来自浏览器前进 / 后退（popstate） */
+let historyNavPending = false
+
+function readScrollPositions() {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem(SCROLL_KEY) ?? '[]')
+    if (!Array.isArray(raw)) return
+    for (const item of raw) {
+      if (Array.isArray(item) && typeof item[0] === 'string' && typeof item[1] === 'number') {
+        scrollPositions.set(item[0] as string, item[1] as number)
+      }
+    }
+  } catch {
+    /* 忽略损坏的旧数据 */
+  }
+}
+
+function persistScrollPositions() {
+  window.clearTimeout(persistTimer)
+  persistTimer = window.setTimeout(() => {
+    // 只保留最近 60 条，避免无限增长
+    const entries = [...scrollPositions.entries()].slice(-60)
+    try {
+      sessionStorage.setItem(SCROLL_KEY, JSON.stringify(entries))
+    } catch {
+      /* 存储写满就放弃持久化，内存里仍然有效 */
+    }
+  }, 300)
+}
+
+function onBodyScroll() {
+  const el = bodyRef.value
+  const target = currentTarget.value
+  if (!el || !target || loading.value) return
+  scrollPositions.set(target, el.scrollTop)
+  persistScrollPositions()
+}
 
 const currentTarget = computed(() =>
   typeof route.query.u === 'string' ? route.query.u : '',
@@ -71,11 +114,38 @@ function remember(url: string) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
 }
 
-async function load(target: string) {
+/** 取地址里的 #锚点（后端会把 hash 去掉，这里只用于前端定位） */
+function hashAnchor(target: string): string {
+  const index = target.indexOf('#')
+  if (index < 0) return ''
+  const raw = target.slice(index + 1)
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return raw
+  }
+}
+
+function scrollToAnchor(anchor: string) {
+  const target =
+    document.getElementById(anchor) ??
+    document.getElementById(encodeURIComponent(anchor)) ??
+    document.getElementById(anchor.replace(/_/g, ' '))
+  target?.scrollIntoView({ block: 'start' })
+}
+
+async function load(target: string, options: { restoreScroll?: boolean } = {}) {
   if (!target) {
     page.value = null
     return
   }
+
+  // 后退 / 前进要回到上次读到的地方，普通点进去则从头开始
+  const restore = options.restoreScroll ?? historyNavPending
+  historyNavPending = false
+
+  // 必须在切换成 loading 视图之前取，否则滚动条被夹到 0 会把记录覆盖掉
+  const savedPos = restore ? scrollPositions.get(target) : undefined
 
   loading.value = true
   error.value = ''
@@ -88,13 +158,31 @@ async function load(target: string) {
     elapsed.value = Math.round(performance.now() - startedAt)
     localStorage.setItem(URL_KEY, result.pageUrl)
     remember(result.pageUrl)
+
+    // 必须先关掉 loading，正文才会真正进入 DOM，后面的定位才有意义
+    loading.value = false
     await nextTick()
-    bodyRef.value?.scrollTo({ top: 0 })
+
+    const anchor = hashAnchor(target)
+
+    if (savedPos !== undefined && savedPos > 0) {
+      // 等一帧让布局稳定，再恢复位置；期间若又跳走就放弃
+      requestAnimationFrame(() => {
+        if (currentTarget.value === target) bodyRef.value?.scrollTo({ top: savedPos })
+      })
+    } else if (!restore && anchor) {
+      scrollToAnchor(anchor)
+      requestAnimationFrame(() => {
+        if (currentTarget.value === target) scrollToAnchor(anchor)
+      })
+    } else {
+      bodyRef.value?.scrollTo({ top: 0 })
+    }
+
     if (window.innerWidth < 1100) tocOpen.value = false
   } catch (err) {
     page.value = null
     error.value = err instanceof ApiError ? err.message : '读取失败，请稍后重试'
-  } finally {
     loading.value = false
   }
 }
@@ -102,15 +190,17 @@ async function load(target: string) {
 function open(input?: string) {
   const raw = (input ?? urlInput.value).trim()
   if (!raw) return
+  // 手动输入地址视为新导航，不要沿用历史位置
+  historyNavPending = false
   if (raw === currentTarget.value) {
-    void load(raw)
+    void load(raw, { restoreScroll: true })
     return
   }
   void router.push({ path: '/wiki', query: { u: raw } })
 }
 
 function reload() {
-  if (currentTarget.value) void load(currentTarget.value)
+  if (currentTarget.value) void load(currentTarget.value, { restoreScroll: true })
 }
 
 function goBack() {
@@ -169,20 +259,44 @@ function formatTime(iso: string): string {
   return date.toLocaleTimeString('zh-CN', { hour12: false })
 }
 
+/** 首次进入页面时也恢复上次位置（相当于浏览器刷新后保持阅读进度） */
+let firstLoad = true
+
+readScrollPositions()
+
 watch(
   () => route.query.u,
   (value) => {
-    if (typeof value === 'string' && value) void load(value)
-    else page.value = null
+    if (typeof value === 'string' && value) {
+      void load(value, { restoreScroll: historyNavPending || firstLoad })
+      firstLoad = false
+    } else {
+      page.value = null
+    }
   },
   { immediate: true },
 )
+
+/** 浏览器前进 / 后退（含工具栏的 ← →）都会先触发 popstate，用来标记本次是历史导航 */
+function onPopState() {
+  historyNavPending = true
+  // 极端情况下（同地址、没有真正发生路由变化）标记会在几秒后自动失效
+  window.setTimeout(() => {
+    historyNavPending = false
+  }, 3000)
+}
 
 onMounted(() => {
   const storedFont = Number(localStorage.getItem(FONT_KEY))
   if (storedFont >= 12 && storedFont <= 18) fontSize.value = storedFont
   history.value = readHistory()
+  window.addEventListener('popstate', onPopState)
   urlInput.value = currentTarget.value || localStorage.getItem(URL_KEY) || ''
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('popstate', onPopState)
+  window.clearTimeout(persistTimer)
 })
 </script>
 
@@ -233,7 +347,12 @@ onMounted(() => {
           <button class="toc-clear" @click="clearHistory">clear history</button>
         </aside>
 
-        <div ref="bodyRef" class="wiki-body" :style="{ fontSize: `${fontSize}px` }">
+        <div
+          ref="bodyRef"
+          class="wiki-body"
+          :style="{ fontSize: `${fontSize}px` }"
+          @scroll.passive="onBodyScroll"
+        >
           <div v-if="loading" class="state loading">
             <span class="blink">▌</span> fetching {{ currentTarget }} ...
           </div>
