@@ -57,6 +57,16 @@ const baseNav = [
 
 const adminNav = [
   {
+    key: 'wiki',
+    label: '文本阅读',
+    to: '/wiki',
+    paths: [
+      'M4 19.5A2.5 2.5 0 0 1 6.5 17H20',
+      'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z',
+      'M8 7h8M8 11h5',
+    ],
+  },
+  {
     key: 'english',
     label: '英语口语',
     to: '/english',

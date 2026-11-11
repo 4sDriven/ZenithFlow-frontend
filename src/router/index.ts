@@ -46,6 +46,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/wiki',
+      name: 'wiki',
+      component: () => import('../views/WikiView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
       path: '/english',
       name: 'english',
       component: () => import('../views/EnglishView.vue'),
