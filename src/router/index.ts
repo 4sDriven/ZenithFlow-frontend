@@ -40,6 +40,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/newspaper',
+      name: 'newspaper',
+      component: () => import('../views/NewspaperView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/english',
       name: 'english',
       component: () => import('../views/EnglishView.vue'),

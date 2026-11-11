@@ -28,6 +28,7 @@ Vue 3 + Vite + TypeScript + Vue Router + Pinia。
 | `/kb` | `views/KnowledgeView.vue` | 知识库 |
 | `/english` | `views/EnglishView.vue` | 英语口语（admin） |
 | `/bili` | `views/BiliCommentsView.vue` | B站视频 / UP 主搜索 + 评论 |
+| `/newspaper` | `views/NewspaperView.vue` | 每日日报（杭州 / 本溪 / B站吃瓜 / Steam / 中国 / 世界） |
 | `/users` | `views/UsersView.vue` | 用户管理（admin） |
 
 ## B站页面（`/bili`）
@@ -70,6 +71,18 @@ Vue 3 + Vite + TypeScript + Vue Router + Pinia。
 - 页面切换不整页刷新，依靠查询参数与 `router.replace`
 - 使用 `<AppLayout fill>` 的应用壳布局：搜索卡、视频卡、分页卡固定，只有中间 `.scroll-area` 滚动；其他页面不要加 `fill`
 - 翻页/切换视频后中间列表回到顶部；返回搜索时恢复上次结果列表的滚动位置
+
+## 日报页面（`/newspaper`）
+
+- 所有登录用户可见；侧栏「日报」
+- 页面只读取 `GET /api/newspaper/today`，六个版块顺序由后端返回，前端不写死内容
+- 版块顺序：杭州 → 本溪 → B站吃瓜 → Steam → 中国 → 世界；顶部锚点按钮滚动到对应版块
+- 每条显示：`官方 / 民间 / 综合` 标签、标题（新窗口打开原文）、2-3 句摘要、来源、热度文案、时间、标签
+- 生成中每 6 秒轮询一次；今日生成失败或尚未生成时，后端回退到最近一期，页面用顶部横幅提示 `stale/error`
+- 管理员显示「重新生成」按钮，点击前确认；`POST /api/newspaper/generate` 返回后继续轮询
+- 「打印」调用 `window.print()`，打印样式隐藏按钮/锚点
+- 纯文字，不加载图片；日期、生成时间固定按 Asia/Shanghai 显示
+- 样式使用全局 CSS 变量；报头/版块标题用 serif，正文用默认 sans；移动端单列
 
 ## 通用组件
 
