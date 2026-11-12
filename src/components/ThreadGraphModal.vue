@@ -1745,17 +1745,13 @@ h3 {
   inset: 0;
   z-index: 0;
   background: var(--user-color, #94a3b8);
-  opacity: 0.16;
+  opacity: var(--node-tint);
   pointer-events: none;
 }
 
 .node-card > * {
   position: relative;
   z-index: 1;
-}
-
-:global([data-theme='dark']) .node-card::before {
-  opacity: 0.24;
 }
 
 .node-card:hover {

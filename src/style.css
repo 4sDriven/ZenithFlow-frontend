@@ -12,6 +12,8 @@
   --gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
   --danger: #dc2626;
   --success: #059669;
+  /* 关系图节点用户色底纹透明度 */
+  --node-tint: 0.16;
 
   --radius-sm: 4px;
   --radius: 6px;
@@ -42,6 +44,7 @@
   --primary: #6366f1;
   --primary-hover: #818cf8;
   --accent: #a78bfa;
+  --node-tint: 0.24;
   color-scheme: dark;
 }
 
