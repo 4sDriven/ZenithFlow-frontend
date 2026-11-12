@@ -3,6 +3,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '../components/AppLayout.vue'
 import { ApiError, apiFetch } from '../lib/api'
+import {
+  cleanTitle,
+  clearRecent,
+  readRecent,
+  rememberRecent,
+  removeRecent,
+  type WikiRecentEntry,
+} from '../lib/wiki-recent'
 
 type WikiSection = { level: number; title: string; anchor: string }
 
@@ -24,19 +32,21 @@ const route = useRoute()
 const router = useRouter()
 
 const URL_KEY = 'zf-wiki-url'
-const HISTORY_KEY = 'zf-wiki-history'
 const FONT_KEY = 'zf-wiki-font'
 const SCROLL_KEY = 'zf-wiki-scroll'
+const SIDEBAR_KEY = 'zf-wiki-sidebar'
 
 const urlInput = ref('')
 const page = ref<WikiPage | null>(null)
 const loading = ref(false)
 const error = ref('')
 const elapsed = ref(0)
-const history = ref<string[]>([])
+const recent = ref<WikiRecentEntry[]>([])
 const fontSize = ref(14)
 const bodyRef = ref<HTMLElement | null>(null)
-const tocOpen = ref(true)
+const sidebarOpen = ref(true)
+const nowTick = ref(Date.now())
+let clockTimer: number | undefined
 
 /** 每个页面地址记住的滚动位置，后退 / 前进时恢复 */
 const scrollPositions = new Map<string, number>()
@@ -50,6 +60,8 @@ let lastPosition = historyPosition()
 const seenPositions = new Set<number>()
 /** 由本页主动 push 的导航（点链接 / 输入地址），一定从顶部开始 */
 let pushingByClick = false
+/** 从「最近访问」点进来的，要回到上次阅读位置 */
+let pendingRestore = false
 
 function historyPosition(): number {
   const state = window.history.state as { position?: number } | null
@@ -104,6 +116,8 @@ function onBodyScroll() {
   const target = currentTarget.value
   if (!el || !target || loading.value || scrollSaveLocked) return
   scrollPositions.set(target, el.scrollTop)
+  // 同时按规范化地址记一份，「最近访问」点回来时也能恢复位置
+  if (page.value) scrollPositions.set(page.value.pageUrl, el.scrollTop)
   persistScrollPositions()
 }
 
@@ -151,19 +165,43 @@ const statusLine = computed(() => {
   return parts.join(' · ')
 })
 
-function readHistory(): string[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
-    return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string') : []
-  } catch {
-    return []
-  }
+function relativeTime(at: number): string {
+  const diff = nowTick.value - at
+  if (!at || diff < 0) return ''
+  const minute = 60_000
+  if (diff < minute) return '刚刚'
+  if (diff < 60 * minute) return `${Math.floor(diff / minute)} 分钟前`
+  if (diff < 24 * 60 * minute) return `${Math.floor(diff / (60 * minute))} 小时前`
+  if (diff < 7 * 24 * 60 * minute) return `${Math.floor(diff / (24 * 60 * minute))} 天前`
+  const date = new Date(at)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
-function remember(url: string) {
-  const next = [url, ...history.value.filter((item) => item !== url)].slice(0, 20)
-  history.value = next
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+/** 从最近访问打开：能恢复上次阅读位置就恢复，否则从头开始 */
+function openRecent(item: WikiRecentEntry) {
+  if (item.url === currentTarget.value || item.key === page.value?.pageUrl) {
+    pendingRestore = false
+    void load(item.url, { restoreScroll: true })
+    return
+  }
+  pendingRestore = true
+  pushingByClick = true
+  void router.push({ path: '/wiki', query: { u: item.url } })
+}
+
+function removeRecentItem(key: string) {
+  recent.value = removeRecent(key)
+}
+
+function clearAllRecent() {
+  clearRecent()
+  recent.value = []
+}
+
+function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value
+  localStorage.setItem(SIDEBAR_KEY, sidebarOpen.value ? '1' : '0')
 }
 
 /** 取地址里的 #锚点（后端会把 hash 去掉，这里只用于前端定位） */
@@ -209,7 +247,14 @@ async function load(target: string, options: { restoreScroll?: boolean } = {}) {
     urlInput.value = result.pageUrl
     elapsed.value = Math.round(performance.now() - startedAt)
     localStorage.setItem(URL_KEY, result.pageUrl)
-    remember(result.pageUrl)
+    recent.value = rememberRecent({
+      key: result.pageUrl,
+      url: result.pageUrl,
+      title: cleanTitle(result.title, result.siteName, result.pageUrl, result.kind),
+      site: result.siteName,
+      at: Date.now(),
+    })
+    nowTick.value = Date.now()
 
     // 必须先关掉 loading，正文才会真正进入 DOM，后面的定位才有意义
     loading.value = false
@@ -229,7 +274,6 @@ async function load(target: string, options: { restoreScroll?: boolean } = {}) {
     }
 
     unlockScrollSave()
-    if (window.innerWidth < 1100) tocOpen.value = false
   } catch (err) {
     page.value = null
     error.value = err instanceof ApiError ? err.message : '读取失败，请稍后重试'
@@ -302,11 +346,6 @@ function setFont(delta: number) {
   localStorage.setItem(FONT_KEY, String(next))
 }
 
-function clearHistory() {
-  history.value = []
-  localStorage.removeItem(HISTORY_KEY)
-}
-
 function formatTime(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
@@ -323,10 +362,13 @@ watch(
   (value) => {
     if (typeof value === 'string' && value) {
       const traversing = isHistoryTraversal()
-      void load(value, { restoreScroll: traversing || firstLoad })
+      const restore = traversing || firstLoad || pendingRestore
+      pendingRestore = false
+      void load(value, { restoreScroll: restore })
       firstLoad = false
     } else {
       page.value = null
+      pendingRestore = false
     }
   },
   { immediate: true },
@@ -335,12 +377,19 @@ watch(
 onMounted(() => {
   const storedFont = Number(localStorage.getItem(FONT_KEY))
   if (storedFont >= 12 && storedFont <= 18) fontSize.value = storedFont
-  history.value = readHistory()
+  recent.value = readRecent()
+  const storedSidebar = localStorage.getItem(SIDEBAR_KEY)
+  sidebarOpen.value = storedSidebar === null ? window.innerWidth >= 1100 : storedSidebar === '1'
   urlInput.value = currentTarget.value || localStorage.getItem(URL_KEY) || ''
+  nowTick.value = Date.now()
+  clockTimer = window.setInterval(() => {
+    nowTick.value = Date.now()
+  }, 60_000)
 })
 
 onBeforeUnmount(() => {
   window.clearTimeout(persistTimer)
+  window.clearInterval(clockTimer)
 })
 </script>
 
@@ -366,29 +415,58 @@ onBeforeUnmount(() => {
         <button class="cmd" title="缩小字号" @click="setFont(-1)">A-</button>
         <button class="cmd" title="放大字号" @click="setFont(1)">A+</button>
         <button
-          v-if="page?.toc.length"
           class="cmd"
-          :class="{ on: tocOpen }"
-          title="目录"
-          @click="tocOpen = !tocOpen"
+          :class="{ on: sidebarOpen }"
+          title="侧栏：最近访问 / 目录"
+          @click="toggleSidebar"
         >
-          toc
+          ≡
         </button>
       </div>
 
       <div class="wiki-main">
-        <aside v-if="page?.toc.length && tocOpen" class="wiki-toc">
-          <p class="toc-head"># contents</p>
-          <button
-            v-for="section in page.toc"
-            :key="`${section.anchor}-${section.title}`"
-            class="toc-item"
-            :style="{ paddingLeft: `${8 + (section.level - 1) * 14}px` }"
-            @click="scrollToSection(section.anchor)"
-          >
-            {{ section.level === 1 ? '#' : '##' }} {{ section.title }}
-          </button>
-          <button class="toc-clear" @click="clearHistory">clear history</button>
+        <div v-if="sidebarOpen" class="wiki-backdrop" @click="toggleSidebar" />
+        <aside v-if="sidebarOpen" class="wiki-side">
+          <section class="side-block">
+            <p class="side-head">
+              <span># recent</span>
+              <span class="side-count">{{ recent.length }}</span>
+            </p>
+            <div
+              v-for="item in recent"
+              :key="item.key"
+              class="recent-item"
+              :class="{ current: !loading && item.key === page?.pageUrl }"
+              role="button"
+              tabindex="0"
+              :title="item.url"
+              @click="openRecent(item)"
+              @keydown.enter.prevent="openRecent(item)"
+            >
+              <span class="recent-title">{{ item.title }}</span>
+              <span class="recent-meta">{{ item.site }} · {{ relativeTime(item.at) }}</span>
+              <button class="recent-del" title="移除这条记录" @click.stop="removeRecentItem(item.key)">
+                ×
+              </button>
+            </div>
+            <p v-if="!recent.length" class="side-empty">// 还没有访问记录</p>
+            <button v-if="recent.length" class="side-clear" @click="clearAllRecent">
+              clear recent
+            </button>
+          </section>
+
+          <section v-if="page?.toc.length" class="side-block">
+            <p class="side-head"># contents</p>
+            <button
+              v-for="section in page.toc"
+              :key="`${section.anchor}-${section.title}`"
+              class="toc-item"
+              :style="{ paddingLeft: `${8 + (section.level - 1) * 14}px` }"
+              @click="scrollToSection(section.anchor)"
+            >
+              {{ section.level === 1 ? '#' : '##' }} {{ section.title }}
+            </button>
+          </section>
         </aside>
 
         <div
@@ -425,18 +503,9 @@ onBeforeUnmount(() => {
             <p class="empty-title">~ 文本阅读器</p>
             <p class="empty-hint">// 粘贴一个 wiki 地址，回车开始。图片会全部隐藏，站内链接仍然可在本页打开。</p>
             <p class="empty-hint">// 例：https://terraria.wiki.gg/zh/木剑</p>
-
-            <div v-if="history.length" class="history">
-              <p class="history-head"># recent</p>
-              <button
-                v-for="item in history.slice(0, 8)"
-                :key="item"
-                class="history-item"
-                @click="open(item)"
-              >
-                {{ item }}
-              </button>
-            </div>
+            <p v-if="recent.length" class="empty-hint">
+              // 最近访问 {{ recent.length }} 个页面，点顶部 ≡ 按钮或左侧列表快速回去。
+            </p>
           </div>
         </div>
       </div>
@@ -522,30 +591,148 @@ onBeforeUnmount(() => {
   color: #d5dae1;
 }
 
-/* 主体：左侧目录 + 正文 */
+/* 主体：左侧栏（最近访问 + 目录） + 正文 */
 .wiki-main {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
 }
 
-.wiki-toc {
-  width: 210px;
+.wiki-side {
+  width: 230px;
   flex-shrink: 0;
   border-right: 1px solid #1b222b;
-  padding: 12px 8px;
+  padding: 12px 0 10px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.side-block {
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 
-.toc-head {
-  margin: 0 0 8px;
-  padding-left: 8px;
+.side-block + .side-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed #1b222b;
+}
+
+.side-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 0 10px;
   color: #4f5a67;
   font-size: 11px;
   letter-spacing: 0.04em;
+}
+
+.side-count {
+  color: #3f4954;
+}
+
+.side-empty {
+  margin: 0;
+  padding: 2px 10px;
+  color: #3f4954;
+  font-size: 11px;
+}
+
+/* 最近访问条目 */
+.recent-item {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  padding: 4px 22px 5px 10px;
+  cursor: pointer;
+}
+
+.recent-item:hover {
+  background: #121820;
+}
+
+.recent-item.current {
+  border-left-color: #5c7183;
+  background: #10161d;
+}
+
+.recent-item:focus-visible {
+  outline: 1px solid #3a4552;
+  outline-offset: -1px;
+}
+
+.recent-title {
+  display: block;
+  color: #b9c2cd;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-item.current .recent-title {
+  color: #e6e9ee;
+}
+
+.recent-meta {
+  display: block;
+  color: #4f5a67;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-del {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  line-height: 14px;
+  text-align: center;
+  background: none;
+  border: none;
+  color: #4f5a67;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.recent-item:hover .recent-del,
+.recent-del:focus-visible {
+  opacity: 1;
+}
+
+.recent-del:hover {
+  color: #d98b8b;
+}
+
+.side-clear {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 2px 10px;
+  background: none;
+  border: none;
+  color: #3f4954;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.side-clear:hover {
+  color: #8b96a3;
 }
 
 .toc-item {
@@ -567,21 +754,9 @@ onBeforeUnmount(() => {
   background: #121820;
 }
 
-.toc-clear {
-  margin-top: auto;
-  padding-top: 12px;
-  background: none;
-  border: none;
-  color: #3f4954;
-  font-family: inherit;
-  font-size: 11px;
-  text-align: left;
-  padding-left: 8px;
-  cursor: pointer;
-}
-
-.toc-clear:hover {
-  color: #8b96a3;
+/* 窄屏时侧栏改为浮层，点背景关闭 */
+.wiki-backdrop {
+  display: none;
 }
 
 .wiki-body {
@@ -666,35 +841,6 @@ onBeforeUnmount(() => {
   color: #4f5a67;
   margin: 0 0 4px;
   word-break: break-all;
-}
-
-.history {
-  margin-top: 26px;
-}
-
-.history-head {
-  color: #4f5a67;
-  margin: 0 0 6px;
-}
-
-.history-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  color: #8b96a3;
-  font-family: inherit;
-  font-size: 12px;
-  padding: 2px 0;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.history-item:hover {
-  color: #d5dae1;
 }
 
 /* 底部状态栏 */
@@ -916,8 +1062,24 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 900px) {
-  .wiki-toc {
-    display: none;
+  .wiki-side {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    width: 260px;
+    background: #0b0e11;
+    border-right: 1px solid #232b35;
+    padding-top: 10px;
+  }
+
+  .wiki-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    background: rgba(0, 0, 0, 0.5);
   }
 
   .wiki-body {
