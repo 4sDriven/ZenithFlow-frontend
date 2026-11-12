@@ -427,45 +427,49 @@ onBeforeUnmount(() => {
       <div class="wiki-main">
         <div v-if="sidebarOpen" class="wiki-backdrop" @click="toggleSidebar" />
         <aside v-if="sidebarOpen" class="wiki-side">
-          <section class="side-block">
+          <section class="side-block side-recent">
             <p class="side-head">
               <span># recent</span>
               <span class="side-count">{{ recent.length }}</span>
             </p>
-            <div
-              v-for="item in recent"
-              :key="item.key"
-              class="recent-item"
-              :class="{ current: !loading && item.key === page?.pageUrl }"
-              role="button"
-              tabindex="0"
-              :title="item.url"
-              @click="openRecent(item)"
-              @keydown.enter.prevent="openRecent(item)"
-            >
-              <span class="recent-title">{{ item.title }}</span>
-              <span class="recent-meta">{{ item.site }} · {{ relativeTime(item.at) }}</span>
-              <button class="recent-del" title="移除这条记录" @click.stop="removeRecentItem(item.key)">
-                ×
+            <div class="side-scroll">
+              <div
+                v-for="item in recent"
+                :key="item.key"
+                class="recent-item"
+                :class="{ current: !loading && item.key === page?.pageUrl }"
+                role="button"
+                tabindex="0"
+                :title="item.url"
+                @click="openRecent(item)"
+                @keydown.enter.prevent="openRecent(item)"
+              >
+                <span class="recent-title">{{ item.title }}</span>
+                <span class="recent-meta">{{ item.site }} · {{ relativeTime(item.at) }}</span>
+                <button class="recent-del" title="移除这条记录" @click.stop="removeRecentItem(item.key)">
+                  ×
+                </button>
+              </div>
+              <p v-if="!recent.length" class="side-empty">// 还没有访问记录</p>
+              <button v-if="recent.length" class="side-clear" @click="clearAllRecent">
+                clear recent
               </button>
             </div>
-            <p v-if="!recent.length" class="side-empty">// 还没有访问记录</p>
-            <button v-if="recent.length" class="side-clear" @click="clearAllRecent">
-              clear recent
-            </button>
           </section>
 
-          <section v-if="page?.toc.length" class="side-block">
+          <section v-if="page?.toc.length" class="side-block side-toc">
             <p class="side-head"># contents</p>
-            <button
-              v-for="section in page.toc"
-              :key="`${section.anchor}-${section.title}`"
-              class="toc-item"
-              :style="{ paddingLeft: `${8 + (section.level - 1) * 14}px` }"
-              @click="scrollToSection(section.anchor)"
-            >
-              {{ section.level === 1 ? '#' : '##' }} {{ section.title }}
-            </button>
+            <div class="side-scroll">
+              <button
+                v-for="section in page.toc"
+                :key="`${section.anchor}-${section.title}`"
+                class="toc-item"
+                :style="{ paddingLeft: `${8 + (section.level - 1) * 14}px` }"
+                @click="scrollToSection(section.anchor)"
+              >
+                {{ section.level === 1 ? '#' : '##' }} {{ section.title }}
+              </button>
+            </div>
           </section>
         </aside>
 
@@ -604,15 +608,54 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   border-right: 1px solid #1b222b;
   padding: 12px 0 10px;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
+/* 最近访问 / 目录各自独立滚动，不共用一个滚动条 */
 .side-block {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  flex: 0 1 auto;
+}
+
+.side-recent {
+  flex: 0 0 auto;
+  max-height: 55%;
+}
+
+.side-toc {
+  flex: 1 1 auto;
+}
+
+.side-block:only-child {
+  max-height: none;
+  flex: 1 1 auto;
+}
+
+.side-scroll {
+  display: flex;
+  flex-direction: column;
   gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 4px;
+}
+
+.side-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.side-scroll::-webkit-scrollbar-thumb {
+  background: #232b35;
+  border-radius: 3px;
+}
+
+.side-scroll::-webkit-scrollbar-thumb:hover {
+  background: #3a4552;
 }
 
 .side-block + .side-block {
