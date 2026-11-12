@@ -100,4 +100,6 @@ Vue 3 + Vite + TypeScript + Vue Router + Pinia。
 - 新增页面放 `src/views/`，并在 `src/router/index.ts` 注册路由
 - 全局状态放 Pinia store，页面局部状态留在组件内
 - 样式使用全局 CSS 变量（`--primary`、`--surface`、`--border` 等），小圆角、无阴影、支持深浅主题
+- **scoped 样式里不要写 `:global(祖先) 后代`**：Vue 会用 `:global()` 的内容替换整条选择器，`:global([data-theme='dark']) .node-card::before` 会编译成 `[data-theme=dark]{…}` 命中 `<html>`，导致整站被压暗。需要随主题变的值用全局 CSS 变量（如 `--node-tint`），在 `src/style.css` 的 `:root` / `:root[data-theme='dark']` 中定义
+- 改样式后除 `npm run build` 通过外，检查 `dist/assets/*.css` 有无命中 `html`/`body`/主题属性的 `opacity`、`filter` 规则；必要时跨路由切换验证不残留
 - 改动后 `npm run build` 必须通过
